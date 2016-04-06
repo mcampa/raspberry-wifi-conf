@@ -9,10 +9,8 @@ var app = angular.module("RpiWifiConfig", []);
 /******************************************************************************\
 Function:
     AppController
-
 Dependencies:
     ...
-
 Description:
     Main application controller
 \******************************************************************************/
@@ -25,6 +23,7 @@ app.controller("AppController", ["PiManager", "$scope", "$location", "$timeout",
         $scope.scan_running              = false;
         $scope.network_passcode          = "";
         $scope.show_passcode_entry_field = false;
+        $scope.connecting                = false;
 
         // Scope filter definitions
         $scope.orderScanResults = function(cell) {
@@ -55,19 +54,58 @@ app.controller("AppController", ["PiManager", "$scope", "$location", "$timeout",
         }
 
         $scope.submit_selection = function() {
+            var connected = true;
+
             if (!$scope.selected_cell) return;
 
+            $scope.connecting = true;
             var wifi_info = {
                 wifi_ssid:      $scope.selected_cell["ssid"],
                 wifi_passcode:  $scope.network_passcode,
             };
 
-            PiManager.enable_wifi(wifi_info).then(function(response) {
-                console.log(response.data);
-                if (response.data.status == "SUCCESS") {
-                    console.log("AP Enabled - nothing left to do...");
+            PiManager.enable_wifi(wifi_info).then(
+                function(response) { //SUCCESS
+                    $scope.connecting = false;
+                    console.log(response.data);
+                    if (response.data.status == "SUCCESS") {
+                    } else {
+                        alert("Connecting failed");
+                        connected = false;
+                    }
+                },
+                function (response) { //ERROR
+                    if (response.status === -1) { //probably network error after AP was switched of
+                        // wait for 2 minutes (AP should be up by then - when connecting to the wifi failed) and then
+                        // check for the wifi status message (wifi status message should return error, in case of success
+                        // access point should not come up at all)
+                        console.log("network error, waiting 2 minutes and then asking for wifi status")
+                        setTimeout(function () {
+                            PiManager.get_wifi_status().then(
+                                function (response) { //SUCCESS
+                                    $scope.connecting = false;
+                                    if(response.data.status == "error") {
+                                      alert("Connecting failed");
+                                      connected = false;
+                                    }
+                                    console.log(response)
+                                },
+                                function (response) { //ERROR
+                                    $scope.connecting = false;
+                                    console.log(response)
+                                }
+                            );
+                        }, 1000 * 60 * 2);
+                    }
                 }
-            });
+            );
+
+            setTimeout(function () {
+                if (connected) {
+                    $scope.connecting = false;
+                    alert("Connecting successful");
+                }
+            }, (1000 * 60 * 2) + 30 * 1000); //2m 30sec
         }
 
         // Defer load the scanned results from the rpi
@@ -85,8 +123,12 @@ app.service("PiManager", ["$http",
             rescan_wifi: function() {
                 return $http.get("/api/rescan_wifi");
             },
-            enable_wifi: function(wifi_info) {
+            enable_wifi: function(wifi_info, successHandler, errorHandler) {
                 return $http.post("/api/enable_wifi", wifi_info);
+            },
+
+            get_wifi_status: function() {
+                return $http.get("/api/wifi_status");
             }
         };
     }]
@@ -105,17 +147,21 @@ app.directive("rwcPasswordEntry", function($timeout) {
             passcode: "=",
             reset:    "&",
             submit:   "&",
+            connecting: "=",
         },
 
         replace: true,          // Use provided template (as opposed to static
                                 // content that the modal scope might define in the
                                 // DOM)
+
         template: [
             "<div class='rwc-password-entry-container' ng-class='{\"hide-me\": !visible}'>",
             "    <div class='box'>",
             "         <input type = 'password' placeholder = 'Passcode...' ng-model = 'passcode' />",
             "         <div class = 'btn btn-cancel' ng-click = 'reset(null)'>Cancel</div>",
             "         <div class = 'btn btn-ok' ng-click = 'submit()'>Submit</div>",
+            "         <span class = 'connection-info loading' ng-class='{\"hide-me\": !connecting}'>Connecting</span>",
+            "         <span class = 'connection-info extra-info' ng-class='{\"hide-me\": !connecting}'>( may take several minutes )</span>",
             "    </div>",
             "</div>"
         ].join("\n"),

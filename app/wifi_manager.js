@@ -26,6 +26,16 @@ function write_template_to_file(template_path, file_name, context, callback) {
 
     ], callback);
 }
+// DEl file
+function del_config_file(file_name, callback) {
+    async.waterfall([
+
+        function del_file(next_step) {
+          console.log("... Going to delete an existing file");
+          fs.unlink(file_name, next_step);
+        }
+    ], callback);
+}
 
 /*****************************************************************************\
     Return a set of functions which we can use to manage and check our wifi
@@ -33,7 +43,7 @@ function write_template_to_file(template_path, file_name, context, callback) {
 \*****************************************************************************/
 module.exports = function() {
     // Detect which wifi driver we should use, the rtl871xdrv or the nl80211
-    exec("iw list", function(error, stdout, stderr) {
+    exec("sudo iw list", function(error, stdout, stderr) {
         if (stderr.match(/^nl80211 not found/)) {
             config.wifi_driver_type = "rtl871xdrv";
         }
@@ -54,8 +64,13 @@ module.exports = function() {
 
     // TODO: rpi-config-ap hardcoded, should derive from a constant
 
+    // Get wpa config
+    var _get_wpa_conf = function () {
+        return fs.readFileSync("/etc/wpa_supplicant/wpa_supplicant.conf", { encoding: "utf8" });
+    },
+
     // Get generic info on an interface
-    var _get_wifi_info = function(callback) {
+    _get_wifi_info = function(callback) {
         var output = {
             hw_addr:      "<unknown>",
             inet_addr:    "<unknown>",
@@ -82,10 +97,10 @@ module.exports = function() {
         // Run a bunch of commands and aggregate info
         async.series([
             function run_ifconfig(next_step) {
-                run_command_and_set_fields("ifconfig wlan0", ifconfig_fields, next_step);
+                run_command_and_set_fields("sudo ifconfig wlan0", ifconfig_fields, next_step);
             },
             function run_iwconfig(next_step) {
-                run_command_and_set_fields("iwconfig wlan0", iwconfig_fields, next_step);
+                run_command_and_set_fields("sudo iwconfig wlan0", iwconfig_fields, next_step);
             },
         ], function(error) {
             last_wifi_info = output;
@@ -104,10 +119,17 @@ module.exports = function() {
             function up(next_step) {
                 exec("sudo ifup " + wlan_iface, function(error, stdout, stderr) {
                     if (!error) console.log("ifup " + wlan_iface + " successful...");
-                    next_step();
+                    console.log("ifup stdout: " + stdout);
+                    console.log("ifup stderr: " + stderr);
+
+                    let err = null;
+                    if (stdout.toLowerCase().indexOf("error") !== -1 || stdout.toLowerCase().indexOf("failed") !== -1) {
+                        err = stdout;
+                    }
+                    callback(err);
                 });
             },
-        ], callback);
+        ]);
     },
 
     // Wifi related functions
@@ -134,9 +156,16 @@ module.exports = function() {
         // If the hw_addr matches the ap_addr
         // and the ap_ssid matches "rpi-config-ap"
         // then we are in AP mode
+        if (info["ap_ssid"] === null || info["ap_ssid"] === undefined){
+          info["ap_ssid"] = config.access_point.ssid
+        }
+        if (info["ap_addr"] === null || info["ap_addr"] === undefined || info["ap_addr"] == 'Not-Associated'){
+          info["ap_addr"] = info["hw_addr"]
+        }
         var is_ap  =
-            info["hw_addr"].toLowerCase() == info["ap_addr"].toLowerCase() &&
+            info["hw_addr"] == info["ap_addr"] &&
             info["ap_ssid"] == config.access_point.ssid;
+
         return (is_ap) ? info["hw_addr"].toLowerCase() : null;
     },
 
@@ -148,7 +177,7 @@ module.exports = function() {
     },
 
     // Enables the accesspoint w/ bcast_ssid. This assumes that both
-    // isc-dhcp-server and hostapd are installed using:
+    // dnsmasq and hostapd are installed using:
     // $sudo npm run-script provision
     _enable_ap_mode = function(bcast_ssid, callback) {
         _is_ap_enabled(function(error, result_addr) {
@@ -183,20 +212,20 @@ module.exports = function() {
                 },
 
                 // Enable DHCP conf, set authoritative mode and subnet
-                function update_dhcpd(next_step) {
+                function update_dhcpcd(next_step) {
                     var context = config.access_point;
                     // We must enable this to turn on the access point
                     write_template_to_file(
-                        "./assets/etc/dhcp/dhcpd.conf.template",
-                        "/etc/dhcp/dhcpd.conf",
+                        "./assets/etc/dhcp/dhcpcd.conf.template",
+                        "/etc/dhcpcd.conf",
                         context, next_step);
                 },
 
                 // Enable the interface in the dhcp server
-                function update_dhcp_interface(next_step) {
+                function update_dns_interface(next_step) {
                     write_template_to_file(
-                        "./assets/etc/default/isc-dhcp-server.template",
-                        "/etc/default/isc-dhcp-server",
+                        "./assets/etc/dnsmasq/dnsmasq.conf.template",
+                        "/etc/dnsmasq.conf",
                         context, next_step);
                 },
 
@@ -220,9 +249,17 @@ module.exports = function() {
                 },
 
                 function restart_dhcp_service(next_step) {
-                    exec("service isc-dhcp-server restart", function(error, stdout, stderr) {
+                    exec("service dhcpcd restart", function(error, stdout, stderr) {
                         //console.log(stdout);
-                        if (!error) console.log("... dhcp server restarted!");
+                        if (!error) console.log("... dhcpcd server restarted!");
+                        next_step();
+                    });
+                },
+
+                function restart_dns_service(next_step) {
+                    exec("service dnsmasq restart", function(error, stdout, stderr) {
+                        //console.log(stdout);
+                        if (!error) console.log("... dnsmasq server restarted!");
                         next_step();
                     });
                 },
@@ -254,22 +291,54 @@ module.exports = function() {
 
             async.series([
 
+                //
+                function del_hostapd(next_step) {
+                    del_config_file(
+                        "/etc/hostapd/hostapd.conf",
+                        next_step);
+                },
+
+                function update_dhcpcd(next_step) {
+                    write_template_to_file(
+                        "./assets/etc/default/dhcpcd.conf",
+                        "/etc/dhcpcd.conf",
+                        connection_info, next_step);
+                },
+
                 // Update /etc/network/interface with correct info...
-                function update_interfaces(next_step) {
+                function update_dhcp(next_step) {
                     write_template_to_file(
                         "./assets/etc/network/interfaces.wifi.template",
                         "/etc/network/interfaces",
                         connection_info, next_step);
                 },
 
+                // Update /etc/network/interface with correct info...
+                function update_wpa(next_step) {
+                    write_template_to_file(
+                        "./assets/etc/wpa_supplicant/wpa_supplicant.conf.template",
+                        "/etc/wpa_supplicant/wpa_supplicant.conf",
+                        connection_info, next_step);
+                },
+
                 // Stop the DHCP server...
                 function restart_dhcp_service(next_step) {
-                    exec("service isc-dhcp-server stop", function(error, stdout, stderr) {
+                    exec("service dnsmasq stop", function(error, stdout, stderr) {
                         //console.log(stdout);
                         if (!error) console.log("... dhcp server stopped!");
                         next_step();
                     });
                 },
+
+                // Stop the hostapd server...
+                function restart_hostapd_service(next_step) {
+                    exec("service hostapd stop", function(error, stdout, stderr) {
+                        //console.log(stdout);
+                        if (!error) console.log("... hostapd stop!");
+                        next_step();
+                    });
+                },
+
 
                 function reboot_network_interfaces(next_step) {
                     _reboot_wireless_network(config.wifi_interface, next_step);
@@ -281,6 +350,7 @@ module.exports = function() {
     };
 
     return {
+        get_wpa_conf:           _get_wpa_conf,
         get_wifi_info:           _get_wifi_info,
         reboot_wireless_network: _reboot_wireless_network,
 
