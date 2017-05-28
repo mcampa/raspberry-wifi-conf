@@ -1,13 +1,12 @@
 var _       = require("underscore")._,
     async   = require("async"),
     fs      = require("fs"),
-    exec    = require("child_process").exec,
-    config  = require("../config.json");
+    exec    = require("child_process").exec;
 
 /*****************************************************************************\
     Return a set of functions which we can use to manage our dependencies
 \*****************************************************************************/
-module.exports = function() {
+module.exports = function(config) {
 
     // Check dependencies based on the input "deps" object.
     // deps will contain: {"binaries": [...], "files":[...]}

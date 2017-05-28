@@ -2,9 +2,7 @@ var path       = require("path"),
     util       = require("util"),
     iwlist     = require("./iwlist"),
     express    = require("express"),
-    bodyParser = require('body-parser'),
-    config     = require("../config.json"),
-    http_test  = config.http_test_only;
+    bodyParser = require('body-parser');
 
 // Helper function to log errors and send a generic status "SUCCESS"
 // message to the caller
@@ -23,7 +21,7 @@ function log_error_send_success_with(success_obj, error, response) {
 /*****************************************************************************\
     Returns a function which sets up the app and our various routes.
 \*****************************************************************************/
-module.exports = function(wifi_manager, callback) {
+module.exports = function(config, wifi_manager, callback) {
     var app = express();
 
     // Configure the app

@@ -1,8 +1,7 @@
 var _       = require("underscore")._,
     async   = require("async"),
     fs      = require("fs"),
-    exec    = require("child_process").exec,
-    config  = require("../config.json");
+    exec    = require("child_process").exec;
 
 // Better template format
 _.templateSettings = {
@@ -31,7 +30,7 @@ function write_template_to_file(template_path, file_name, context, callback) {
     Return a set of functions which we can use to manage and check our wifi
     connection information
 \*****************************************************************************/
-module.exports = function() {
+module.exports = function(config) {
     // Detect which wifi driver we should use, the rtl871xdrv or the nl80211
     exec("iw list", function(error, stdout, stderr) {
         if (stderr.match(/^nl80211 not found/)) {
